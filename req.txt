@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+sentence-transformers
+numpy
+pydantic
+python-multipart
+transformers
+docx2txt
+python-docx
+pypdf
+tqdm
