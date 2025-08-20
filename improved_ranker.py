@@ -1,353 +1,294 @@
 #!/usr/bin/env python3
 """
-Improved CV ranking system that fixes the parsing and scoring issues.
-Addresses the problem where graduate AI developers score lower than sophomore students.
+Semantic-focused CV ranking
+- BGE prompt fix
+- 280/60 chunking via parsing.py
+- JD -> 6–12 semantic queries (whole + light sections + top NPs)
+- Section priors & CV section boosts
+- Top-k pooling per chunk; weighted-avg + best
+- Batched, normalized embeddings
 """
 
 import os
+import re
 import numpy as np
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple
 from sentence_transformers import SentenceTransformer
 import parsing as P
+from datetime import datetime
 
-# Model cache
-_MODELS = {}
+_MODELS: Dict[str, SentenceTransformer] = {}
 
-# Map friendly local names to Hugging Face repo IDs for fallback
 REMOTE_MODEL_MAP = {
     "bge-base-en-v1.5": "BAAI/bge-base-en-v1.5",
-    
+    "bge-large-en-v1.5": "BAAI/bge-large-en-v1.5",
+    "bge-m3": "BAAI/bge-m3",
 }
 
 def get_model(name: str = "bge-base-en-v1.5") -> SentenceTransformer:
-    """Get or load a SentenceTransformer model.
-
-    Strategy:
-    1) If a local directory exists for `name` (or common local aliases), load it.
-    2) Otherwise, fall back to Hugging Face hub using a mapped repo id.
-    """
     if name in _MODELS:
         return _MODELS[name]
-
-    # 1) Try local paths first
-    candidate_paths = [
-        name,
-        name.rstrip("/") + "/",
-    ]
-    # Add common local aliases for convenience
-    if name.startswith("bge-base-en-v1.5"):
-        candidate_paths.extend(["bge-base-en-v1.5", "bge-base-en-v1.5/"])
-   
-    found_local = None
-    for path in candidate_paths:
-        try:
-            if os.path.exists(path) and os.path.isdir(path):
-                found_local = path
-                break
-        except Exception:
-            continue
-
-    if found_local:
-        _MODELS[name] = SentenceTransformer(found_local)
-        print(f"✅ Loaded local model: {found_local}")
-        return _MODELS[name]
-
-    # 2) Fall back to Hugging Face repo
+    for path in [name, name.rstrip("/") + "/", "bge-base-en-v1.5", "bge-base-en-v1.5/"]:
+        if os.path.isdir(path):
+            _MODELS[name] = SentenceTransformer(path)
+            print(f"✅ Loaded local model: {path}")
+            return _MODELS[name]
     repo_id = REMOTE_MODEL_MAP.get(name, name)
-    try:
-        _MODELS[name] = SentenceTransformer(repo_id)
-        print(f"🌐 Loaded remote model from HF: {repo_id}")
-        return _MODELS[name]
-    except Exception as e:
-        raise RuntimeError(
-            f"Failed to load model '{name}'. Tried local paths {candidate_paths} and remote repo '{repo_id}'. "
-            f"Error: {e}"
-        )
+    _MODELS[name] = SentenceTransformer(repo_id)
+    print(f"🌐 Loaded remote model from HF: {repo_id}")
+    return _MODELS[name]
 
-def improved_parse_cv(path: str) -> dict:
-    """
-    Improved CV parsing that handles cases where section detection fails.
-    Falls back to intelligent text chunking if sections can't be identified.
-    """
-    try:
-        # Try standard parsing first
-        cv_data = P.parse_cv_file(path, chunk_max_words=900, chunk_overlap_words=200)
-        
-        # Check if parsing was successful
-        sections = cv_data.get('sections', {})
-        
-        # If only 'other' section or parsing failed, use fallback approach
-        if len(sections) <= 1 or 'other' in sections and len(sections) == 1:
-            print(f"⚠️  Section parsing failed for {path}, using fallback approach")
-            
-            # Extract full text
-            full_text = cv_data.get('full_text', '')
-            if not full_text:
-                return cv_data
-            
-            # Use intelligent chunking based on content
-            chunks = []
-            
-            # Split by common CV patterns
-            lines = full_text.split('\n')
-            current_chunk = []
-            current_word_count = 0
-            
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-                
-                # Check if this line looks like a section header
-                is_header = any(keyword in line.lower() for keyword in [
-                    'education', 'experience', 'skills', 'projects', 'summary', 
-                    'objective', 'work', 'employment', 'technical', 'certifications'
-                ])
-                
-                # Start new chunk if we hit a header or current chunk is getting too long
-                if is_header or current_word_count > 800:
-                    if current_chunk:
-                        chunk_text = ' '.join(current_chunk)
-                        if len(chunk_text.split()) > 50:  # Only add substantial chunks
-                            chunks.append({
-                                'text': chunk_text,
-                                'section': 'content',
-                                'start_word': 0,
-                                'end_word': len(chunk_text.split()),
-                                'token_len_est': int(len(chunk_text.split()) * 0.75)
-                            })
-                    current_chunk = [line]
-                    current_word_count = len(line.split())
-                else:
-                    current_chunk.append(line)
-                    current_word_count += len(line.split())
-            
-            # Add final chunk
-            if current_chunk:
-                chunk_text = ' '.join(current_chunk)
-                if len(chunk_text.split()) > 50:
-                    chunks.append({
-                        'text': chunk_text,
-                        'section': 'content',
-                        'start_word': 0,
-                        'end_word': len(chunk_text.split()),
-                        'token_len_est': int(len(chunk_text.split()) * 0.75)
-                    })
-            
-            # Update CV data with improved chunks
-            cv_data['chunks'] = chunks
-            cv_data['sections'] = {'improved_content': 'Content parsed with fallback method'}
-            
-            print(f"✅ Fallback parsing created {len(chunks)} chunks")
-        
-        return cv_data
-        
-    except Exception as e:
-        print(f"❌ Error in improved parsing: {e}")
-        # Return basic structure if all else fails
-        return {
-            'cv_id': os.path.basename(path),
-            'source_path': path,
-            'chunks': [],
-            'sections': {},
-            'full_text': '',
-            'contact': {'emails': [], 'phones': [], 'links': []}
-        }
+# -----------------------------
+# JD query construction+    
+# -----------------------------
 
-def calculate_semantic_score(jd_embedding: np.ndarray, cv_chunks: List[dict], model: SentenceTransformer) -> float:
-    """
-    Calculate semantic similarity score with improved weighting.
-    Considers chunk quality and relevance.
-    """
-    if not cv_chunks:
-        return 0.0
-    
-    chunk_scores = []
-    chunk_weights = []
-    
-    for chunk in cv_chunks:
-        chunk_text = chunk.get('text', '').strip()
-        if not chunk_text or len(chunk_text.split()) < 10:
+HEAD_CANON = {
+    "requirements": "requirements",
+    "must have": "requirements",
+    "must-have": "requirements",
+    "qualifications": "requirements",
+    "skills": "skills",
+    "responsibilities": "responsibilities",
+    "duties": "responsibilities",
+    "what you will do": "responsibilities",
+    "about": "about",
+    "about us": "about",
+    "summary": "summary",
+    "objective": "summary",
+    "profile": "summary",
+    "preferred": "preferred",
+    "nice to have": "preferred",
+}
+
+HEAD_RE = re.compile(r"^\s*([A-Za-z][A-Za-z \-/']{1,40})\s*:?\s*$")
+
+STOP = set("""
+a an and are as at be by for from has have in into is it its of on or our that the their this to with you your we they will
+""".split())
+
+WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9+./#\-]*")
+
+def _light_split_sections(text: str) -> Dict[str, str]:
+    lines = [l.rstrip() for l in text.splitlines()]
+    sections: Dict[str, List[str]] = {}
+    current = "other"
+    sections[current] = []
+    for ln in lines:
+        m = HEAD_RE.match(ln.strip().lower())
+        if m:
+            raw = m.group(1).strip().lower()
+            can = HEAD_CANON.get(raw, raw)
+            current = can
+            sections.setdefault(current, [])
             continue
-        
-        # Encode chunk
-        chunk_emb = model.encode([chunk_text], normalize_embeddings=True)[0]
-        similarity = np.dot(chunk_emb, jd_embedding)
-        
-        # Weight chunks by quality (longer, more structured chunks get higher weight)
-        word_count = len(chunk_text.split())
-        quality_weight = min(word_count / 100.0, 2.0)  # Cap at 2.0x weight
-        
-        chunk_scores.append(similarity)
-        chunk_weights.append(quality_weight)
-    
-    if not chunk_scores:
-        return 0.0
-    
-    # Calculate weighted average
-    total_weight = sum(chunk_weights)
-    if total_weight == 0:
-        return max(chunk_scores) if chunk_scores else 0.0
-    
-    weighted_score = sum(score * weight for score, weight in zip(chunk_scores, chunk_weights)) / total_weight
-    
-    # Also consider the best chunk score
-    best_score = max(chunk_scores)
-    
-    # Combine weighted average with best score (70% weighted, 30% best)
-    final_score = 0.7 * weighted_score + 0.3 * best_score
-    
-    return final_score
+        sections.setdefault(current, []).append(ln)
+    return {k: "\n".join(v).strip() for k, v in sections.items() if v and "".join(v).strip()}
 
-def improved_rank_cv(
-    jd_text: str,
-    cv_path: str,
-    model_name: str = "bge-base-en-v1.5"
-) -> Tuple[float, dict, str]:
+def _top_np_phrases(text: str, k: int = 8) -> List[str]:
+    # Simple noun-phrase-ish mining: keep 2-5 token spans, drop stopwords-only spans.
+    tokens = [t.lower() for t in WORD.findall(text)]
+    # build candidate ngrams
+    cands = {}
+    for n in (2, 3, 4, 5):
+        for i in range(len(tokens) - n + 1):
+            span = tokens[i:i+n]
+            if all(t in STOP for t in span): 
+                continue
+            # keep spans with at least one non-stop token
+            if any(t not in STOP for t in span):
+                phrase = " ".join(span)
+                cands[phrase] = cands.get(phrase, 0) + 1
+    # sort by frequency then length (desc)
+    ranked = sorted(cands.items(), key=lambda x: (x[1], len(x[0])), reverse=True)
+    out = []
+    seen = set()
+    for p, _ in ranked:
+        if p in seen: 
+            continue
+        seen.add(p)
+        out.append(p)
+        if len(out) >= k:
+            break
+    return out
+
+def build_jd_queries(jd_text: str, min_q: int = 6, max_q: int = 12) -> Tuple[List[str], np.ndarray]:
+    """Return (queries, priors aligned to queries)."""
+    jd_text = (jd_text or "").strip()
+    sec = _light_split_sections(jd_text)
+    queries: List[str] = []
+    priors: List[float] = []
+
+    # always include whole JD
+    queries.append(jd_text)
+    priors.append(1.0)
+
+    # add key sections if present
+    SEC_PRIOR = {"requirements": 2.0, "skills": 2.0, "responsibilities": 1.2, "about": 0.8, "summary": 1.0, "preferred": 1.0}
+    for name in ["requirements", "skills", "responsibilities", "about"]:
+        if name in sec and sec[name].strip() and sec[name].strip() not in queries:
+            queries.append(sec[name].strip())
+            priors.append(SEC_PRIOR.get(name, 1.0))
+
+    # mine noun-phrases from req/skills (or entire JD if missing)
+    base = " ".join([sec.get("requirements", ""), sec.get("skills", "")]).strip() or jd_text
+    phrases = _top_np_phrases(base, k=6) 
+    for p in phrases:
+        if p not in queries:
+            queries.append(p)
+            priors.append(1.1)  # phrase queries slightly upweighted
+
+    # trim / pad
+    if len(queries) > max_q:
+        queries, priors = queries[:max_q], priors[:max_q]
+    while len(queries) < min_q:
+        queries.append(jd_text)
+        priors.append(1.0)
+
+    priors = np.asarray(priors, dtype=np.float32)
+    priors = priors / (priors.sum() or 1.0)
+    return queries, priors
+
+# -----------------------------
+# Semantic scoring
+# -----------------------------
+
+YEAR_RE = re.compile(r"\b(20\d{2}|19\d{2})\b")
+
+def _len_cap(text: str, cap: int = 280) -> float:
+    n = max(1, len(text.split()))
+    return float(np.clip(n / float(cap), 0.2, 1.0))
+
+def _sec_boost(sec: str) -> float:
+    return {
+        "skills": 2.0,
+        "experience": 1.6,
+        "projects": 1.3,
+        "education": 0.9,
+    }.get((sec or "other").lower(), 1.0)
+
+def _recent_boost(text: str, years_window: int = 3) -> float:
+    try:
+        yrs = [int(y) for y in YEAR_RE.findall(text)]
+        if not yrs: 
+            return 1.0
+        if max(yrs) >= datetime.now().year - years_window:
+            return 1.1
+    except Exception:
+        pass
+    return 1.0
+
+def _mean_top_k(arr: np.ndarray, k: int = 2) -> np.ndarray:
+    # arr shape: (nc, nq)
+    if arr.shape[1] == 0:
+        return np.zeros(arr.shape[0], dtype=np.float32)
+    k = min(k, arr.shape[1])
+    part = np.partition(arr, -k, axis=1)[:, -k:]
+    return part.mean(axis=1)
+
+def calculate_semantic_score_batched(jd_queries: List[str],
+                                     jd_priors: np.ndarray,
+                                     cv_chunks: List[dict],
+                                     model: SentenceTransformer) -> Dict[str, any]:
+    """Return dict with 'semantic' float and diagnostics."""
+    if not cv_chunks:
+        return {"semantic": 0.0, "chunk_scores": [], "section_sims": []}
+
+    # Encode in batches (normalized)
+    q_encoded = model.encode(
+        [f"Represent this sentence for searching relevant passages: {q}" for q in jd_queries],
+        normalize_embeddings=True, convert_to_numpy=True
+    )  # (nq, d)
+
+    chunk_texts = [c.get("text", "") for c in cv_chunks]
+    c_encoded = model.encode(chunk_texts, normalize_embeddings=True, convert_to_numpy=True)  # (nc, d)
+
+    # Similarity matrix
+    S = np.matmul(c_encoded, q_encoded.T).astype(np.float32)  # (nc, nq)
+
+    # Per-chunk pooling with JD priors
+    mean_top2 = _mean_top_k(S, k=2)                           # (nc,)
+    prior_wmean = (S * jd_priors[None, :]).sum(axis=1)        # (nc,)
+    base_chunk = 0.3 * mean_top2 + 0.7 * prior_wmean          # (nc,)
+
+    # Quality **weights** (no direct shrinking of similarity)
+    len_caps   = np.array([_len_cap(t) for t in chunk_texts], dtype=np.float32)
+    sec_boosts = np.array([_sec_boost(c.get("section")) for c in cv_chunks], dtype=np.float32)
+    rec_boosts = np.array([_recent_boost(t) for t in chunk_texts], dtype=np.float32)
+    weights    = len_caps * sec_boosts * rec_boosts           # (nc,)
+
+    # Weighted average + best (from base similarities)
+    wavg = float((base_chunk * weights).sum() / (weights.sum() or 1.0))
+    best = float(base_chunk.max() if base_chunk.size else 0.0)
+    semantic = 0.7 * wavg + 0.3 * best
+
+    # Bound to [0,1]
+    semantic = float(np.clip(semantic, 0.0, 1.0))
+
+    # Diagnostics: sample some per-section sims
+    section_sims = {
+        "mean_top2_head": float(mean_top2.mean()),
+        "prior_wmean_head": float(prior_wmean.mean()),
+        "len_cap_mean": float(len_caps.mean()),
+        "sec_boost_mean": float(sec_boosts.mean()),
+        "rec_boost_mean": float(rec_boosts.mean()),
+    }
+
+    # Per-chunk scores for diagnostics: combine base similarity with quality weights
+    try:
+        chunk_scores = (base_chunk * weights).astype(np.float32)
+    except Exception:
+        # Fallback: use base_chunk
+        chunk_scores = base_chunk.astype(np.float32)
+
+    return {
+        "semantic": semantic,
+        "chunk_scores": chunk_scores.tolist(),
+        "section_sims": section_sims
+    }
+
+# -----------------------------
+# Public entry (keeps API shape)
+# -----------------------------
+
+def improved_rank_cv(jd_text: str, cv_path: str, model_name: str = "bge-base-en-v1.5") -> Tuple[float, dict, str]:
     """
-    Improved CV ranking that addresses parsing and scoring issues.
-    
-    Returns:
-        (score, cv_data, explanation)
+    Returns (score_0_1, cv_data, explanation)
     """
     try:
-        # Load model
         model = get_model(model_name)
-        
-        # Prepare query with better instruction
-        query = f"Represent this job description for searching relevant CVs: {jd_text}"
-        jd_embedding = model.encode([query], normalize_embeddings=True)[0]
-        
-        # Parse CV with improved method
-        cv_data = improved_parse_cv(cv_path)
-        
-        # Extract chunks
-        chunks = cv_data.get('chunks', [])
-        
+
+        # Parse CV with ~280/60 chunks
+        cv_data = P.parse_cv_file(cv_path, chunk_max_words=280, chunk_overlap_words=60)
+        chunks = cv_data.get("chunks", [])
+
         if not chunks:
-            # Fallback: use full text as single chunk
-            full_text = cv_data.get('full_text', '')
+            full_text = cv_data.get("full_text", "")
             if full_text:
-                chunks = [{'text': full_text, 'section': 'full_text'}]
+                chunks = [{"text": full_text, "section": "full_text"}]
             else:
                 return 0.0, cv_data, "No text content found in CV"
-        
-        # Calculate semantic score
-        score = calculate_semantic_score(jd_embedding, chunks, model)
-        
-        # Generate explanation
-        explanation = f"CV parsed into {len(chunks)} chunks. "
-        if 'improved_content' in cv_data.get('sections', {}):
-            explanation += "Used fallback parsing due to section detection failure. "
-        
-        explanation += f"Final score: {score:.3f} ({score*100:.1f}%)"
-        
+
+        # Build JD queries (6–12) with priors
+        jd_queries, jd_priors = build_jd_queries(jd_text, min_q=6, max_q=12)
+
+        # Batched semantic scoring
+        ss = calculate_semantic_score_batched(jd_queries, jd_priors, chunks, model)
+        score = ss["semantic"]
+
+        # Human explanation (short)
+        top3 = sorted(ss["chunk_scores"], reverse=True)[:3]
+        explanation = (
+            f"Semantic-only scoring with BGE prompt. "
+            f"JD queries={len(jd_queries)}; CV chunks={len(chunks)}; "
+            f"chunk top-3={', '.join(f'{x:.3f}' for x in top3)}. "
+            f"Final semantic={score:.3f}."
+        )
+
         return score, cv_data, explanation
-        
+
     except Exception as e:
         return 0.0, {}, f"Error in ranking: {str(e)}"
 
-def test_improved_ranking():
-    """Test the improved ranking system."""
-    print("🧪 Testing Improved CV Ranking System...")
-    print("=" * 60)
-    
-    # Job description
-    jd_text = """Job Title: AI Developer
-Location: Cairo, Egypt (Hybrid)
-Employment Type: Full-time
-
-About the Role
-We are seeking a passionate and skilled AI Developer to join our technology team. You will be responsible for designing, developing, and deploying AI-driven solutions that address complex business challenges. The ideal candidate has strong problem-solving skills, experience with machine learning frameworks, and the ability to work collaboratively in a fast-paced environment.
-
-Key Responsibilities
-Design, implement, and optimize machine learning models for various applications.
-Preprocess and analyze large datasets to extract actionable insights.
-Collaborate with data scientists, backend developers, and product managers to integrate AI models into production systems.
-Conduct research and experiments to improve model accuracy, efficiency, and scalability.
-Develop APIs and interfaces to expose AI model functionality to other services.
-Document processes, models, and code to ensure maintainability and reproducibility.
-
-Requirements
-Bachelor's or Master's degree in Computer Science, Artificial Intelligence, Data Science, or a related field.
-Strong proficiency in Python and libraries such as NumPy, Pandas, Scikit-learn, and TensorFlow/PyTorch.
-Experience with Natural Language Processing (NLP) and/or Computer Vision.
-Understanding of cloud platforms (AWS, Azure, GCP) for model deployment.
-Familiarity with MLOps tools and workflows.
-Strong problem-solving and analytical thinking skills.
-Excellent communication and teamwork abilities.
-
-Preferred Qualifications
-Experience with large language models (LLMs) and prompt engineering.
-Knowledge of vector databases and embedding models.
-Contributions to open-source AI projects.
-Understanding of distributed computing and GPU optimization."""
-    
-    # Test CVs
-    cv_paths = [
-        "data/cvs/Resume-MarwanGhazal.pdf",      # Sophomore AI student
-        "data/cvs/Mohamed_Osama_CV.pdf"          # Graduate AI developer
-    ]
-    
-    cv_names = [
-        "Resume-MarwanGhazal (Sophomore AI Student)",
-        "Mohamed_Osama_CV (Graduate AI Developer)"
-    ]
-    
-    results = []
-    
-    for cv_path, cv_name in zip(cv_paths, cv_names):
-        print(f"\n📋 Testing: {cv_name}")
-        print(f"📁 Path: {cv_path}")
-        
-        if not os.path.exists(cv_path):
-            print(f"❌ CV file not found: {cv_path}")
-            continue
-        
-        try:
-            score, cv_data, explanation = improved_rank_cv(jd_text, cv_path)
-            
-            print(f"✅ Score: {score:.3f} ({score*100:.1f}%)")
-            print(f"📝 Explanation: {explanation}")
-            
-            # Show parsing results
-            sections = cv_data.get('sections', {})
-            chunks = cv_data.get('chunks', [])
-            print(f"   - Sections: {list(sections.keys())}")
-            print(f"   - Chunks: {len(chunks)}")
-            
-            results.append({
-                'name': cv_name,
-                'score': score,
-                'explanation': explanation
-            })
-            
-        except Exception as e:
-            print(f"❌ Error: {e}")
-    
-    # Summary
-    print("\n" + "=" * 60)
-    print("📊 IMPROVED RANKING RESULTS")
-    print("=" * 60)
-    
-    if len(results) == 2:
-        results.sort(key=lambda x: x['score'], reverse=True)
-        
-        print(f"🥇 Highest Score: {results[0]['name']} - {results[0]['score']:.3f} ({results[0]['score']*100:.1f}%)")
-        print(f"🥈 Lower Score: {results[1]['name']} - {results[1]['score']:.3f} ({results[1]['score']*100:.1f}%)")
-        
-        score_diff = results[0]['score'] - results[1]['score']
-        print(f"📈 Score Difference: {score_diff:.3f} ({score_diff*100:.1f}%)")
-        
-        # Check if ranking makes sense now
-        if "Graduate AI Developer" in results[0]['name'] and "Sophomore AI Student" in results[1]['name']:
-            print("✅ IMPROVED: Ranking is now CORRECT!")
-        elif "Sophomore AI Student" in results[0]['name'] and "Graduate AI Developer" in results[1]['name']:
-            print("❌ Still incorrect ranking - further investigation needed")
-        else:
-            print("⚠️  Unexpected ranking order")
-    
-    return results
-
+# (Optional) direct test
 if __name__ == "__main__":
-    test_improved_ranking()
+    print("Run tests via your pytest files or call improved_rank_cv() directly.")

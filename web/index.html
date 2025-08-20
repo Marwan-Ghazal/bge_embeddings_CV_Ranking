@@ -136,25 +136,30 @@ el('frm').addEventListener('submit', async (ev)=>{
   statusEl.textContent = 'Ranking…';
   statusEl.className = 'status warn';
 
-  try{
-    const res = await fetch('/rank', { method:'POST', body: fd });
-    const txt = await res.text();
-    if(!res.ok){
-      statusEl.textContent = `Error ${res.status}: ${txt}`;
+    try{
+      const res = await fetch('/rank', { method:'POST', body: fd });
+      const json = await res.json().catch(async _=>{
+        // If body is not valid JSON, fall back to text for display
+        const t = await res.text();
+        return { _raw: t };
+      });
+      if(!res.ok){
+        console.error('Ranking error', res.status, json);
+        statusEl.textContent = `Error ${res.status}: ${json.message || json._raw || 'unknown'}`;
+        statusEl.className = 'status err';
+        btn.disabled = false;
+        return;
+      }
+      renderResults(json);
+      statusEl.textContent = 'Done.';
+      statusEl.className = 'status ok';
+    }catch(err){
+      console.error('Network error', err);
+      statusEl.textContent = 'Network error: ' + (err?.message || err);
       statusEl.className = 'status err';
+    }finally{
       btn.disabled = false;
-      return;
     }
-    const data = JSON.parse(txt);
-    renderResults(data);
-    statusEl.textContent = 'Done.';
-    statusEl.className = 'status ok';
-  }catch(err){
-    statusEl.textContent = 'Network error: ' + (err?.message || err);
-    statusEl.className = 'status err';
-  }finally{
-    btn.disabled = false;
-  }
 });
 
 function renderResults(payload){
@@ -200,206 +205,3 @@ function renderResults(payload){
 </script>
 </body>
 </html>
-=======
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>CV Ranker – Upload JD file</title>
-  <style>
-    :root { --bg:#0b1220; --card:#111a2b; --text:#eaf0ff; --muted:#9fb0d1; --accent:#5aa9ff; }
-    *{box-sizing:border-box}
-    body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Segoe UI,Arial,sans-serif;}
-    .wrap{max-width:1100px;margin:32px auto;padding:0 16px;}
-    h1{font-size:24px;margin:0 0 10px}
-    .muted{color:var(--muted)}
-    .row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-    .card{background:var(--card);border-radius:16px;padding:18px;box-shadow:0 4px 24px rgba(0,0,0,.35);margin-bottom:18px}
-    input[type="file"],select,input[type="number"],input[type="email"],textarea{width:100%;border:1px solid rgba(255,255,255,.15);background:#0c1424;color:var(--text);border-radius:10px;padding:10px}
-    textarea{resize:vertical;min-height:120px;font-family:inherit}
-    label{font-size:13px;color:#bcd0ff;display:block;margin:8px 0 6px}
-    button{background:linear-gradient(90deg,#5aa9ff,#62e6ff);border:none;color:#081024;padding:10px 14px;border-radius:12px;font-weight:700;cursor:pointer}
-    button[disabled]{opacity:.6;cursor:not-allowed}
-    .badge{display:inline-block;background:rgba(90,169,255,.15);color:var(--accent);padding:2px 8px;border-radius:999px;font-size:12px}
-    .status{font-size:14px;margin-top:8px}
-    .ok{color:#7CFF9C}.err{color:#ff7c7c}.warn{color:#ffd27c}
-    table{width:100%;border-collapse:collapse}
-    th,td{padding:10px 8px;border-bottom:1px solid rgba(255,255,255,.08);vertical-align:top}
-    th{font-weight:600;color:#bcd0ff;text-align:left}
-    tr:hover{background:rgba(255,255,255,.03)}
-    .bar{height:10px;background:rgba(255,255,255,.08);border-radius:8px;overflow:hidden}
-    .bar>span{display:block;height:100%;background:linear-gradient(90deg,#5aa9ff,#62e6ff)}
-    canvas{width:100% !important;max-height:340px}
-    .small{font-size:12px}
-    .files-list{font-size:12px;color:var(--muted);margin-top:6px;white-space:nowrap;overflow:auto}
-  </style>
-</head>
-<body>
-<div class="wrap">
-  <div class="card">
-    <h1>CV Ranker <span class="badge" id="badgeModel"></span></h1>
-    <div class="muted small">Enter your email, paste JD text, and upload a CV (.pdf/.docx) to rank.</div>
-  </div>
-
-  <div class="card">
-    <form id="frm" enctype="multipart/form-data">
-      <div class="row">
-        <div>
-          <label for="email">Email</label>
-          <input id="email" type="email" placeholder="your.email@example.com" required />
-          
-          <label for="jd_text" style="margin-top:14px">Job Description</label>
-          <textarea id="jd_text" placeholder="Paste the job description text here..." rows="8" required></textarea>
-          
-          <label for="cv_file" style="margin-top:14px">CV file (.pdf / .docx)</label>
-          <input id="cv_file" type="file" accept=".pdf,.docx" required />
-          <div class="files-list" id="cv_name"></div>
-        </div>
-
-        <div>
-          <div style="margin-top:12px">
-            <button id="btn" type="submit">Rank CV</button>
-            <span id="status" class="status"></span>
-          </div>
-        </div>
-      </div>
-    </form>
-  </div>
-
-  <div id="results" class="card" style="display:none">
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-      <h2 style="margin:0;font-size:18px">Results</h2>
-      <div class="small muted" id="meta"></div>
-    </div>
-    <canvas id="chart"></canvas>
-
-    <h3 style="margin:16px 0 8px;font-size:16px">Ranked CVs</h3>
-    <table id="tbl">
-      <thead>
-        <tr>
-          <th>Rank</th>
-          <th>CV</th>
-          <th>Similarity %</th>
-          <th>Path</th>
-          <th>Email</th>
-          <th>Phone</th>
-          <th>Links</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-  </div>
-</div>
-
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script>
-const el = id => document.getElementById(id);
-const badgeModel = el('badgeModel');
-const statusEl   = el('status');
-const resultsBox = el('results');
-const metaEl     = el('meta');
-const cvNameEl   = el('cv_name');
-let chart;
-
-(async function preloadModels(){
-  try{
-    const r = await fetch('/models');
-    if(!r.ok) return;
-    const data = await r.json();
-    badgeModel.textContent = 'Local Model';
-  }catch(_){}
-})();
-
-el('cv_file').addEventListener('change', e=>{
-  cvNameEl.textContent = e.target.files[0] ? e.target.files[0].name : '';
-});
-
-el('frm').addEventListener('submit', async (ev)=>{
-  ev.preventDefault();
-  statusEl.textContent = '';
-  resultsBox.style.display = 'none';
-
-  const email = el('email').value.trim();
-  const jdText = el('jd_text').value.trim();
-  const cvFile = el('cv_file').files[0];
-
-  if(!email){ statusEl.textContent = 'Please enter your email.'; statusEl.className='status err'; return; }
-  if(!jdText){ statusEl.textContent = 'Please enter job description text.'; statusEl.className='status err'; return; }
-  if(!cvFile){ statusEl.textContent = 'Please select a CV file.'; statusEl.className='status err'; return; }
-
-  const fd = new FormData();
-  fd.append('email', email);
-  fd.append('jd_text', jdText);
-  fd.append('cv_file', cvFile, cvFile.name);
-
-  const btn = el('btn');
-  btn.disabled = true;
-  statusEl.textContent = 'Ranking…';
-  statusEl.className = 'status warn';
-
-  try{
-    const res = await fetch('/rank', { method:'POST', body: fd });
-    const txt = await res.text();
-    if(!res.ok){
-      statusEl.textContent = `Error ${res.status}: ${txt}`;
-      statusEl.className = 'status err';
-      btn.disabled = false;
-      return;
-    }
-    const data = JSON.parse(txt);
-    renderResults(data);
-    statusEl.textContent = 'Done.';
-    statusEl.className = 'status ok';
-  }catch(err){
-    statusEl.textContent = 'Network error: ' + (err?.message || err);
-    statusEl.className = 'status err';
-  }finally{
-    btn.disabled = false;
-  }
-});
-
-function renderResults(payload){
-  const rows = (payload.rows || []).slice().sort((a,b)=>b.score-a.score);
-  badgeModel.textContent = payload.model || '';
-  metaEl.textContent = `Email: ${payload.email || ''} • Generated: ${payload.generated_at || ''}`;
-
-  // Table
-  const tb = document.querySelector('#tbl tbody');
-  tb.innerHTML = '';
-  const pct = v => (v*100).toFixed(2) + '%';
-  rows.forEach((r,i)=>{
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>${i+1}</td>
-      <td>${r.cv_id || ''}</td>
-      <td>
-        <div class="bar"><span style="width:${(r.score*100).toFixed(2)}%"></span></div>
-        <div class="small muted">${pct(r.score)}</div>
-      </td>
-      <td class="small">${r.source_path || ''}</td>
-      <td class="small">${r.email || ''}</td>
-      <td class="small">${r.phone || ''}</td>
-      <td class="small">${r.links || ''}</td>
-    `;
-    tb.appendChild(tr);
-  });
-
-  // Chart (top 12)
-  const top = rows.slice(0,12);
-  const labels = top.map(r=>r.cv_id);
-  const data = top.map(r=>+(r.score*100).toFixed(2));
-  const ctx = document.getElementById('chart').getContext('2d');
-  if(chart){ chart.destroy(); }
-  chart = new Chart(ctx, {
-    type: 'bar',
-    data: { labels, datasets: [{ label: 'Similarity (%)', data }] },
-    options: { responsive:true, scales:{ y:{ beginAtZero:true, max:100 } }, plugins:{ legend:{ display:false } } }
-  });
-
-  resultsBox.style.display = 'block';
-}
-</script>
-</body>
-</html>
->>>>>>> 9a541f2404140acac2ed32a3d0b46a8535ade0cd

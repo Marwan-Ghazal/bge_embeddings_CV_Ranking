@@ -12,6 +12,8 @@ from pydantic import BaseModel
 import parsing as P  # your parsing.py
 from improved_ranker import improved_rank_cv, get_model  # improved ranking system
 from pathlib import Path
+# app.py (imports)
+from calibration import calibrate
 
 # ------------------------
 # Get local IP address
@@ -31,8 +33,9 @@ def get_local_ip():
 # Config
 # ------------------------
 # Recommended smaller chunks for BGE (less truncation)
-CHUNK_MAX = 900
-CHUNK_OVL = 200
+CHUNK_MAX = 280
+CHUNK_OVL = 60
+
 
 DEFAULT_MODEL = "bge-base-en-v1.5"  # Use local model folder
 
@@ -73,6 +76,7 @@ def favicon():
 
 # ------------------------
 # Health & models
+
 # ------------------------
 @app.get("/health")
 def health():
@@ -104,10 +108,6 @@ async def rank(
     jd_text: str = Form(...),
     cv_file: UploadFile = File(...),
 ):
-    """
-    Improved CV ranking using enhanced BGE bi-encoder system.
-    Better parsing, chunking, and semantic scoring for accurate results.
-    """
     if not email:
         raise HTTPException(400, "email is required")
     if not jd_text:
@@ -117,24 +117,23 @@ async def rank(
 
     tmpdir = tempfile.mkdtemp(prefix="cvrank_")
     try:
-        # Save CV file
+        # Save upload
         cv_name = cv_file.filename or "cv"
         if not cv_name.lower().endswith((".pdf", ".docx")):
             raise HTTPException(400, "CV file must be .pdf or .docx")
-        
+
         cv_path = os.path.join(tmpdir, cv_name)
         with open(cv_path, "wb") as out:
             shutil.copyfileobj(cv_file.file, out)
 
-        # Rank via improved ranking system (handles parsing internally)
+        # Run ranking
         try:
-            score, cv_data, explanation = improved_rank_cv(
-                jd_text, cv_path, model_name=DEFAULT_MODEL
-            )
+            score, cv_data, explanation = improved_rank_cv(jd_text, cv_path, model_name=DEFAULT_MODEL)
         except Exception as e:
             raise HTTPException(500, f"Ranking failed: {str(e)}")
-
-        # Normalize types for JSON
+        raw = float(score)
+        cal, cal_kind = calibrate(raw)
+        # Normalize score to float (0..1)
         try:
             score_val = float(score)
         except Exception:
@@ -142,14 +141,15 @@ async def rank(
 
         rows = [{
             "cv_id": cv_data.get("cv_id", "unknown"),
-            "score": score_val,
+            # show calibrated score to the UI (still 0..1)
+            "score": cal,
             "source_path": cv_data.get("source_path", ""),
             "email": email,
             "phone": ",".join(cv_data.get("contact", {}).get("phones", [])),
             "links": ",".join(cv_data.get("contact", {}).get("links", [])),
             "chunk_count": len(cv_data.get("chunks", [])),
             "sections_found": list(cv_data.get("sections", {}).keys()),
-            "explanation": explanation
+            "explanation": f"{explanation} | calibration={cal_kind}, raw={raw:.3f}, cal={cal:.3f}"
         }]
 
         return {
@@ -157,11 +157,13 @@ async def rank(
             "generated_at": datetime.now().isoformat(timespec="seconds"),
             "email": email,
             "jd_text": jd_text,
-            "rows": rows,
-            "warning": None,
+            "rows": rows,                    # legacy UI keeps working
+            "score_raw": raw,                # helpful to debug
+            "score_0_100": round(cal*100, 1),# easy to display as %
+            "calibration": cal_kind,
             "cv_count": 1,
-            "ranking_method": "improved_bi_encoder",
-            "description": "Enhanced BGE ranking with improved parsing and semantic scoring"
+            "ranking_method": "semantic (calibrated)",
+            "description": "Batched section-aware semantic scoring w/ monotonic calibration"
         }
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
