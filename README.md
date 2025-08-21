@@ -1,3 +1,14 @@
+Project overview
+----------------
+This repository provides a small, local-first CV ranking service that encodes job descriptions and candidate CVs using BGE-style sentence embeddings and ranks candidates by semantic relevance plus optional coverage checks. It exposes:
+
+- a FastAPI web UI for uploading a job description and one CV (`app.py`),
+- an API endpoint (`POST /rank`) that returns a ranked row for the uploaded CV,
+- two ranking implementations: a lightweight `improved_ranker.py` for fast semantic scoring, and a more feature-rich `ranker.py` that adds constraint coverage, optional cross-encoder reranking and calibration.
+
+The project is intended as a local demo and research tool: run locally, prefer local model folders (to avoid large downloads), and iterate on scoring heuristics or small labelled sets for better accuracy.
+
+
 How to start
 
 .venv\Scripts\activate
