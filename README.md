@@ -1,4 +1,4 @@
-# 🎯 BGE CV Ranking System
+# BGE CV Ranking System
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.68+-green.svg)](https://fastapi.tiangolo.com)
@@ -7,19 +7,19 @@
 
 A **local-first CV ranking service** that uses state-of-the-art BGE (BAAI General Embedding) models to semantically match job descriptions with candidate CVs. Features a modern web interface, REST API, and intelligent scoring with calibration.
 
-## ✨ Features
+## Features
 
-- 🚀 **Fast Semantic Matching** - BGE embeddings for accurate CV-JD similarity scoring
-- 🌐 **Modern Web Interface** - Clean, responsive UI with real-time ranking visualization
-- 🔧 **REST API** - Full FastAPI integration with automatic documentation
-- 📄 **Multi-format Support** - PDF and DOCX CV parsing with fallback mechanisms
-- 🎯 **Smart Chunking** - Optimized text segmentation (280 words, 60 overlap) for better embeddings
-- 📊 **Score Calibration** - Monotonic calibration for more interpretable similarity scores
-- 🏠 **Local-first** - Prioritizes local models, falls back to Hugging Face when needed
-- 🔍 **Section-aware Parsing** - Intelligent CV section detection and scoring boosts
-- 📈 **Interactive Charts** - Visual ranking results with Chart.js integration
+- **Fast Semantic Matching** - BGE embeddings for accurate CV-JD similarity scoring
+- **Modern Web Interface** - Clean, responsive UI with real-time ranking visualization
+- **REST API** - Full FastAPI integration with automatic documentation
+- **Multi-format Support** - PDF and DOCX CV parsing with fallback mechanisms
+- **Smart Chunking** - Optimized text segmentation (280 words, 60 overlap) for better embeddings
+- **Score Calibration** - Monotonic calibration for more interpretable similarity scores
+- **Local-first** - Prioritizes local models, falls back to Hugging Face when needed
+- **Section-aware Parsing** - Intelligent CV section detection and scoring boosts
+- **Interactive Charts** - Visual ranking results with Chart.js integration
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
@@ -37,7 +37,7 @@ A **local-first CV ranking service** that uses state-of-the-art BGE (BAAI Genera
                        └─────────────────┘
 ```
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
@@ -75,13 +75,13 @@ A **local-first CV ranking service** that uses state-of-the-art BGE (BAAI Genera
 
 The server will start and display:
 ```
-🚀 Starting CV Ranker Server (Clean Version)...
-📍 Local URL: http://127.0.0.1:8000
-🌐 Network URL: http://192.168.1.100:8000
-📖 API Docs: http://127.0.0.1:8000/docs
+  Starting CV Ranker Server (Clean Version)...
+  Local URL: http://127.0.0.1:8000
+  Network URL: http://192.168.1.100:8000
+  API Docs: http://127.0.0.1:8000/docs
 ```
 
-## 💻 Usage
+## Usage
 
 ### Web Interface
 
@@ -155,7 +155,7 @@ curl -X POST "http://127.0.0.1:8000/rank" \
 - **Server IP:** `GET /ip`
 - **API Documentation:** `GET /docs` (Swagger UI)
 
-## 🔧 Configuration
+## Configuration
 
 ### Model Configuration
 
@@ -182,7 +182,7 @@ Optimized for BGE embeddings:
 - **Overlap:** 60 words
 - **Section-aware:** Preserves CV section context
 
-## 📊 Scoring System
+## Scoring System
 
 ### Semantic Similarity
 
@@ -204,7 +204,7 @@ Raw Score → Calibrated Score
 0.60      → 0.93  (Excellent match)
 ```
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 bge_embeddings_CV_Ranking/
@@ -219,7 +219,7 @@ bge_embeddings_CV_Ranking/
 └── README.md                   # This file
 ```
 
-## 🛠️ Development
+## Development
 
 ### Adding New Models
 
@@ -247,7 +247,7 @@ The web interface (`web/index.html`) uses:
 - Chart.js for visualizations
 - Responsive design principles
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### Common Issues
 
@@ -274,7 +274,7 @@ Enable detailed logging:
 python app.py --log-level debug
 ```
 
-## 🤝 Contributing
+## Contributing
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
@@ -282,17 +282,17 @@ python app.py --log-level debug
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - [BAAI](https://github.com/FlagOpen/FlagEmbedding) for BGE embeddings
 - [FastAPI](https://fastapi.tiangolo.com/) for the excellent web framework
 - [Sentence Transformers](https://www.sbert.net/) for embedding utilities
 
-## 📞 Support
+## Support
 
 For questions, issues, or contributions:
 - Open an [Issue](../../issues)
@@ -301,4 +301,3 @@ For questions, issues, or contributions:
 
 ---
 
-**Built with ❤️ for efficient, local-first CV ranking**
